@@ -1,0 +1,35 @@
+{
+  "name": "web",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack --port 3001",
+    "build": "next build",
+    "start": "next start",
+    "lint": "biome check",
+    "lint:fix": "biome check --fix",
+    "lint:fsd": "steiger ./src",
+    "typecheck": "next typegen && tsc --noEmit"
+  },
+  "dependencies": {
+    "@repo/api": "workspace:*",
+    "@repo/typescript-config": "workspace:*",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@tanstack/react-query": "^5.90.16",
+    "next": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "react-hook-form": "catalog:"
+  },
+  "devDependencies": {
+    "@feature-sliced/steiger-plugin": "^0.5.7",
+    "@repo/typescript-config": "workspace:*",
+    "@types/node": "^24.10.1",
+    "@types/react": "19.1.0",
+    "@types/react-dom": "19.1.1",
+    "steiger": "0.5.11",
+    "tailwindcss": "^4.1.17",
+    "typescript": "catalog:"
+  }
+}

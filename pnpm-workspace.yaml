@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+
+catalog:
+  next: ^16.0.7
+  react: ^19.1.0
+  react-dom: ^19.1.0
+  react-hook-form: 7.68.0
+  typescript: 5.9.3

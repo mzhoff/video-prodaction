@@ -1,0 +1,33 @@
+{
+  "name": "api",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "nest start --watch",
+    "build": "nest build",
+    "start": "nest start",
+    "start:debug": "nest start --debug --watch",
+    "start:prod": "node dist/main",
+    "lint": "biome check",
+    "lint:fix": "biome check --fix",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@repo/api": "workspace:*"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "@nestjs/schematics": "^11.0.0",
+    "@repo/typescript-config": "workspace:*",
+    "@types/node": "^24.10.1",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "catalog:",
+    "vitest": "^4.0.15"
+  }
+}

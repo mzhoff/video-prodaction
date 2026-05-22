@@ -1,0 +1,35 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "globalDependencies": ["**/.env.*local"],
+  "tasks": {
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+    },
+    "api#build": {
+      "env": ["DATABASE_URL", "BASE_PATH"]
+    },
+    "web#build": {
+      "env": ["BASE_PATH", "NEXT_PUBLIC_API_URL"]
+    },
+    "lint": {},
+    "lint:fix": {
+      "cache": false
+    },
+    "//#lint:root": {},
+    "//#lint:root:fix": {
+      "cache": false
+    },
+    "lint:fsd": {},
+    "typecheck": {
+      "dependsOn": ["codegen"]
+    },
+    "test": {},
+    "test:e2e": {},
+    "codegen": {}
+  }
+}

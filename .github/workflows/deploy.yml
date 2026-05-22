@@ -1,0 +1,398 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+  IMAGE_NAMESPACE: ${{ secrets.DOCKER_IMAGE_NAMESPACE || 'security-sphere' }}
+
+jobs:
+  authorize:
+    name: Check permission
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify trusted actor on main
+        env:
+          BRANCH: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          ALLOWED_USERS: "vonavined satunnaisuus"
+        run: |
+          set -euo pipefail
+
+          if [[ "${BRANCH}" != "main" ]]; then
+            exit 0
+          fi
+
+          case " ${ALLOWED_USERS} " in
+            *" ${ACTOR} "*) exit 0 ;;
+            *)
+              echo "Actor '${ACTOR}' is not authorized to deploy to main."
+              exit 1
+              ;;
+          esac
+
+  prepare:
+    name: Collect branch meta
+    needs: authorize
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      channel: ${{ steps.branch.outputs.channel }}
+      image_tag: ${{ steps.branch.outputs.image_tag }}
+      environment: ${{ steps.branch.outputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve branch metadata
+        id: branch
+        run: |
+          if [[ "${GITHUB_REF##*/}" == "main" ]]; then
+            echo "channel=prod" >> "$GITHUB_OUTPUT"
+            echo "environment=prod" >> "$GITHUB_OUTPUT"
+            echo "image_tag=prod" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=dev" >> "$GITHUB_OUTPUT"
+            echo "environment=dev" >> "$GITHUB_OUTPUT"
+            echo "image_tag=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+  build_web:
+    name: Build web
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare.outputs.environment }}
+    permissions:
+      contents: read
+    env:
+      ENABLE_INDEXING: ${{ vars.ENABLE_INDEXING }}
+      NEXT_PUBLIC_YANDEX_METRIKA_ID: '${{ vars.YANDEX_METRIKA_ID }}'
+      NEXT_PUBLIC_YANDEX_VERIFICATION: '${{ vars.YANDEX_VERIFICATION }}'
+      NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKER_REGISTRY_USERNAME }}
+          password: ${{ secrets.DOCKER_REGISTRY_PASSWORD }}
+
+      - name: Build and push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/web:${{ needs.prepare.outputs.image_tag }}
+          build-args: |
+            ENABLE_INDEXING=${{ env.ENABLE_INDEXING }}
+            NEXT_PUBLIC_YANDEX_METRIKA_ID=${{ env.NEXT_PUBLIC_YANDEX_METRIKA_ID }}
+            NEXT_PUBLIC_YANDEX_VERIFICATION=${{ env.NEXT_PUBLIC_YANDEX_VERIFICATION }}
+            NEXT_PUBLIC_API_URL=${{ env.NEXT_PUBLIC_API_URL }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/web:cache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/web:cache,mode=min,compression=zstd
+
+  build_api:
+    name: Build api
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare.outputs.environment }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKER_REGISTRY_USERNAME }}
+          password: ${{ secrets.DOCKER_REGISTRY_PASSWORD }}
+
+      - name: Build and push api image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/api:${{ needs.prepare.outputs.image_tag }}
+          # cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/api:cache
+          # cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/api:cache,mode=min,compression=zstd
+
+  deploy:
+    name: Deploy to server
+    needs:
+      - prepare
+      - build_web
+      - build_api
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare.outputs.environment }}
+    permissions:
+      contents: read
+    env:
+      TARGET_ENV: ${{ needs.prepare.outputs.environment }}
+      IMAGE_TAG: ${{ needs.prepare.outputs.image_tag }}
+      REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+      IMAGE_NAMESPACE: ${{ secrets.DOCKER_IMAGE_NAMESPACE || 'security-sphere' }}
+      ANSIBLE_CONFIG: ${{ github.workspace }}/deploy/ansible.cfg
+      ANSIBLE_LOCAL_TEMP: /tmp/ansible-local
+      ANSIBLE_REMOTE_TEMP: /tmp/ansible-remote
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_PORT: ${{ secrets.SSH_PORT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible
+
+      - name: Configure SSH
+        run: |
+          install -d -m 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_rsa
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          ssh-keyscan -p "${SSH_PORT:-22}" "${SSH_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Write vault password
+        run: |
+          install -m 600 /dev/null vault.pass
+          echo "${{ secrets.VAULT_PASSWORD }}" > vault.pass
+
+      - name: Deploy api
+        run: >
+          ansible-playbook deploy/playbooks/api.yml
+          -i deploy/inventory/hosts.yml
+          -l ${TARGET_ENV}
+          --vault-password-file vault.pass
+          --extra-vars "target_env=${TARGET_ENV} registry=${REGISTRY} image_namespace=${IMAGE_NAMESPACE} image_tag=${IMAGE_TAG} registry_username=${{ secrets.DOCKER_REGISTRY_USERNAME }} registry_password=${{ secrets.DOCKER_REGISTRY_PASSWORD }}"
+
+      - name: Deploy web
+        run: >
+          ansible-playbook deploy/playbooks/web.yml
+          -i deploy/inventory/hosts.yml
+          -l ${TARGET_ENV}
+          --vault-password-file vault.pass
+          --extra-vars "target_env=${TARGET_ENV} registry=${REGISTRY} image_namespace=${IMAGE_NAMESPACE} image_tag=${IMAGE_TAG} registry_username=${{ secrets.DOCKER_REGISTRY_USERNAME }} registry_password=${{ secrets.DOCKER_REGISTRY_PASSWORD }}"
+
+  notify:
+    name: Notify Telegram
+    needs:
+      - authorize
+      - prepare
+      - build_web
+      - build_api
+      - deploy
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Build Telegram message
+        id: build_message
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+          RUN_ID: ${{ github.run_id }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          ACTOR: ${{ github.actor }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+        run: |
+          python3 <<'PY'
+          import html
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          owner, repo = os.environ["REPO"].split("/", 1)
+          token = os.environ["GH_TOKEN"]
+          current_run_id = int(os.environ["RUN_ID"])
+          current_sha = os.environ["SHA"]
+          current_ref = os.environ["REF_NAME"]
+          workflow_name = os.environ["WORKFLOW_NAME"]
+          actor = os.environ["ACTOR"]
+          repo_url = f'{os.environ["SERVER_URL"]}/{os.environ["REPO"]}'
+          actor_url = f'{os.environ["SERVER_URL"]}/{urllib.parse.quote(actor, safe="")}'
+          run_url = f'{os.environ["SERVER_URL"]}/{os.environ["REPO"]}/actions/runs/{current_run_id}'
+          needs = json.loads(os.environ["NEEDS_JSON"])
+
+          job_order = [
+              ("authorize", "Check permission"),
+              ("prepare", "Collect branch meta"),
+              ("build_web", "Build web"),
+              ("build_api", "Build api"),
+              ("deploy", "Deploy to server"),
+          ]
+          results = {job_id: (needs.get(job_id) or {}).get("result", "unknown") for job_id, _ in job_order}
+
+          if any(result == "failure" for result in results.values()):
+              conclusion = "failure"
+          elif any(result == "cancelled" for result in results.values()):
+              conclusion = "cancelled"
+          elif all(result == "success" for result in results.values()):
+              conclusion = "success"
+          elif any(result == "skipped" for result in results.values()):
+              conclusion = "skipped"
+          else:
+              conclusion = "neutral"
+
+          environment = os.environ.get("ENVIRONMENT") or {
+              "main": "prod",
+              "develop": "dev",
+          }.get(current_ref, "unknown")
+
+          def gh(path: str):
+              url = f"https://api.github.com{path}"
+              req = urllib.request.Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "github-actions-telegram-deploy-notifier",
+                  },
+              )
+              with urllib.request.urlopen(req) as resp:
+                  return json.load(resp)
+
+          previous_success_sha = None
+          if current_ref:
+              branch_q = urllib.parse.quote(current_ref, safe="")
+              runs = gh(
+                  f"/repos/{owner}/{repo}/actions/workflows/deploy.yml/runs?branch={branch_q}&per_page=100"
+              ).get("workflow_runs", [])
+              candidates = [
+                  run
+                  for run in runs
+                  if run.get("id") != current_run_id and run.get("conclusion") == "success"
+              ]
+              candidates.sort(key=lambda run: (run.get("created_at", ""), run.get("id", 0)), reverse=True)
+              if candidates:
+                  previous_success_sha = candidates[0].get("head_sha")
+
+          if previous_success_sha and previous_success_sha != current_sha:
+              basehead = urllib.parse.quote(f"{previous_success_sha}...{current_sha}", safe="")
+              commits = gh(f"/repos/{owner}/{repo}/compare/{basehead}").get("commits", [])
+          else:
+              commits = [gh(f"/repos/{owner}/{repo}/commits/{current_sha}")]
+
+          subjects = []
+          seen = set()
+          for commit in commits:
+              message = commit["commit"]["message"].split("\n", 1)[0].strip()
+              if message and message not in seen:
+                  subjects.append(message)
+                  seen.add(message)
+
+          if not subjects:
+              subjects = ["No commit messages found"]
+
+          status_icons = {
+              "success": "✅",
+              "failure": "❌",
+              "cancelled": "⚪",
+              "timed_out": "⏱️",
+              "action_required": "⚠️",
+              "neutral": "ℹ️",
+              "skipped": "⏭️",
+              "unknown": "❔",
+          }
+          status_text = {
+              "success": "succeeded",
+              "failure": "failed",
+              "cancelled": "was cancelled",
+              "timed_out": "timed out",
+              "action_required": "requires action",
+              "neutral": "completed",
+              "skipped": "was skipped",
+              "unknown": "finished with unknown status",
+          }
+
+          lines = [
+              f"{status_icons.get(conclusion, '❔')} <b>{html.escape(workflow_name)} {status_text.get(conclusion, conclusion)}</b>",
+              f'<b>Repo:</b> <a href="{html.escape(repo_url, quote=True)}">{html.escape(os.environ["REPO"])}</a>',
+              f"<b>Environment:</b> {html.escape(environment)}",
+              f"<b>Ref:</b> {html.escape(current_ref)}",
+              f"<b>SHA:</b> <code>{html.escape(current_sha[:7])}</code>",
+              f'<b>Actor:</b> <a href="{html.escape(actor_url, quote=True)}">{html.escape(actor)}</a>',
+              "",
+              "<b>Jobs:</b>",
+          ]
+
+          for job_id, job_name in job_order:
+              result = results[job_id]
+              lines.append(f"{status_icons.get(result, '❔')} {html.escape(job_name)}: <code>{html.escape(result)}</code>")
+
+          lines.extend([
+              "",
+              "<b>Changelog:</b>",
+          ])
+
+          for subject in subjects[:20]:
+              lines.append(f"• {html.escape(subject)}")
+
+          if len(subjects) > 20:
+              lines.append(f"• ... and {len(subjects) - 20} more")
+
+          lines.append("")
+
+          if previous_success_sha and previous_success_sha != current_sha:
+              lines.append(
+                  f"<b>Compare:</b> <code>{html.escape(previous_success_sha[:7])}...{html.escape(current_sha[:7])}</code>"
+              )
+          else:
+              lines.append("<b>Compare:</b> first successful workflow run found for this ref")
+
+          lines.append(f"<b>Workflow run:</b> {html.escape(run_url)}")
+
+          message_file = os.path.abspath("telegram_message.txt")
+          with open(message_file, "w", encoding="utf-8") as f:
+              f.write("\n".join(lines))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"message_file={message_file}\n")
+          PY
+
+      - name: Send Telegram message to topic
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TOPIC_ID: ${{ secrets.TELEGRAM_TOPIC_ID }}
+          MESSAGE_FILE: ${{ steps.build_message.outputs.message_file }}
+        run: |
+          curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${CHAT_ID}" \
+            --data-urlencode "message_thread_id=${TOPIC_ID}" \
+            --data-urlencode "parse_mode=HTML" \
+            --data-urlencode "disable_web_page_preview=true" \
+            --data-urlencode "text@${MESSAGE_FILE}"

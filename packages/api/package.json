@@ -1,0 +1,44 @@
+{
+  "name": "@repo/api",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "dev": "tsc -b -w -v",
+    "build": "tsc -b -v",
+    "lint": "biome check",
+    "lint:fix": "biome check --fix",
+    "typecheck": "tsc --noEmit",
+    "openapi-ts": "openapi-ts"
+  },
+  "main": "./dist/entry.js",
+  "types": "./dist/entry.d.ts",
+  "files": [
+    "./dist/**"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/entry.js",
+      "require": "./dist/entry.js"
+    },
+    "./*": {
+      "import": "./dist/*.js",
+      "require": "./dist/*.js"
+    }
+  },
+  "devDependencies": {
+    "@hey-api/openapi-ts": "0.90.10",
+    "@repo/typescript-config": "workspace:*",
+    "@tanstack/react-query": "^5.90.16",
+    "@types/node": "^24.10.1",
+    "ts-loader": "^9.4.3",
+    "ts-node": "^10.9.2",
+    "typescript": "catalog:"
+  },
+  "peerDependencies": {
+    "@tanstack/react-query": "^5.90.16"
+  }
+}
