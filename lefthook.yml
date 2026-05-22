@@ -10,3 +10,8 @@ commit-msg:
   commands:
     'lint commit message':
       run: pnpm exec commitlint --color=false --edit {1}
+
+pre-push:
+  commands:
+    quality-checks:
+      run: pnpm lint && pnpm lint:fsd && pnpm typecheck
