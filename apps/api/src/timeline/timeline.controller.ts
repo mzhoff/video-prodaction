@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Post } from "@nestjs/common";
 import type { TimelineCaseExample } from "@repo/api";
+import { RequireRole } from "../access/require-role.decorator.js";
 
 // biome-ignore lint/style/useImportType: NestJS DI needs runtime class references.
 import {
@@ -12,6 +13,7 @@ export class TimelineController {
   constructor(private readonly timelineService: TimelineService) {}
 
   @Post()
+  @RequireRole("editor")
   previewDraft(
     @Body() payload: unknown,
   ): Promise<TimelineDraftPreviewResponse> {
@@ -19,11 +21,13 @@ export class TimelineController {
   }
 
   @Get("examples")
+  @RequireRole("reader")
   getExamples(): TimelineCaseExample[] {
     return this.timelineService.getCaseExamples();
   }
 
   @Get(":id")
+  @RequireRole("reader")
   getTimelineDraft(
     @Param("id") id: string,
   ): Promise<TimelineDraftPreviewResponse> {

@@ -1,6 +1,19 @@
-import { Module } from "@nestjs/common";
+import {
+  type MiddlewareConsumer,
+  Module,
+  type NestModule,
+  RequestMethod,
+} from "@nestjs/common";
+import { APP_FILTER, APP_GUARD } from "@nestjs/core";
 
+import { RequestContextMiddleware } from "./access/request-context.middleware.js";
+import { RolesGuard } from "./access/roles.guard.js";
 import { DatabaseModule } from "./database/database.module.js";
+import { ErrorLogsRepository } from "./ops/error-logs.repository.js";
+import { GlobalExceptionFilter } from "./ops/global-exception.filter.js";
+import { OpsController } from "./ops/ops.controller.js";
+import { PilotWorkflowController } from "./pilot/pilot-workflow.controller.js";
+import { PilotWorkflowService } from "./pilot/pilot-workflow.service.js";
 import { ProjectsController } from "./projects/projects.controller.js";
 import { ProjectsRepository } from "./projects/projects.repository.js";
 import { ProjectsService } from "./projects/projects.service.js";
@@ -21,8 +34,12 @@ import { TimelineDraftsRepository } from "./timeline/timeline-drafts.repository.
     RenderJobsController,
     ExportsController,
     TimelineController,
+    OpsController,
+    PilotWorkflowController,
   ],
   providers: [
+    ErrorLogsRepository,
+    PilotWorkflowService,
     ProjectsRepository,
     ProjectsService,
     RenderJobsRepository,
@@ -31,6 +48,21 @@ import { TimelineDraftsRepository } from "./timeline/timeline-drafts.repository.
     ReverieAdapter,
     TimelineDraftsRepository,
     TimelineService,
+    {
+      provide: APP_GUARD,
+      useClass: RolesGuard,
+    },
+    {
+      provide: APP_FILTER,
+      useClass: GlobalExceptionFilter,
+    },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(RequestContextMiddleware).forRoutes({
+      path: "*",
+      method: RequestMethod.ALL,
+    });
+  }
+}
