@@ -36,4 +36,16 @@ export class ProjectsRepository {
 
     return result.rowCount === 0 ? null : (result.rows[0]?.payload ?? null);
   }
+
+  async update(project: VideoProject): Promise<void> {
+    await this.postgres.query(
+      `
+      UPDATE projects
+      SET payload = $2::jsonb,
+          updated_at = NOW()
+      WHERE external_id = $1
+      `,
+      [project.id, project],
+    );
+  }
 }

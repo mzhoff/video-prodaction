@@ -83,6 +83,26 @@ export class PostgresService implements OnModuleInit, OnModuleDestroy {
 
       CREATE INDEX IF NOT EXISTS timeline_drafts_source_semantic_id_idx
         ON timeline_drafts(source_semantic_id);
+
+      CREATE TABLE IF NOT EXISTS system_error_logs (
+        id BIGSERIAL PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        method TEXT NOT NULL,
+        path TEXT NOT NULL,
+        status_code INTEGER NOT NULL,
+        error_code TEXT,
+        message TEXT NOT NULL,
+        details JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT system_error_logs_role_check CHECK (role IN ('editor', 'reader'))
+      );
+
+      CREATE INDEX IF NOT EXISTS system_error_logs_created_at_idx
+        ON system_error_logs(created_at DESC);
+
+      CREATE INDEX IF NOT EXISTS system_error_logs_status_code_idx
+        ON system_error_logs(status_code);
     `);
   }
 }

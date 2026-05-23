@@ -12,6 +12,7 @@ import type {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type TransitionPreset = "cut" | "crossfade" | "wipe" | "zoom";
+type UserRole = "editor" | "reader";
 
 interface EditableScene {
   id: string;
@@ -28,6 +29,23 @@ interface ExportStatusResponse {
   downloadUrl?: string;
   errorCode?: string;
   errorMessage?: string;
+}
+
+interface ErrorSummary {
+  totalLast24h: number;
+  byStatusCode: Array<{ statusCode: number; total: number }>;
+}
+
+interface ErrorLogItem {
+  id: string;
+  requestId: string;
+  role: UserRole;
+  method: string;
+  path: string;
+  statusCode: number;
+  errorCode?: string;
+  message: string;
+  createdAt: string;
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000";
@@ -84,24 +102,30 @@ const initialScenes: EditableScene[] = [
   },
 ];
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+async function requestJson<T>(
+  path: string,
+  init?: RequestInit,
+  options?: { role?: UserRole },
+): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      "x-user-role": options?.role ?? "editor",
       ...(init?.headers ?? {}),
     },
   });
 
   const payload = (await response.json().catch(() => null)) as {
     message?: string | string[];
+    code?: string;
   } | null;
 
   if (!response.ok) {
     const message = Array.isArray(payload?.message)
       ? payload.message.join("; ")
       : (payload?.message ?? `Request failed: ${response.status}`);
-    throw new Error(message);
+    throw new Error(payload?.code ? `${payload.code}: ${message}` : message);
   }
 
   return payload as T;
@@ -233,7 +257,7 @@ function buildProjectPayload(
   const project: VideoProject = {
     id: projectId,
     name: projectName.trim(),
-    description: "Stage-4 Editor draft",
+    description: "Stage-6 Product Minimum draft",
     createdAt: now,
     updatedAt: now,
     currentVersionId: versionId,
@@ -243,7 +267,7 @@ function buildProjectPayload(
         versionNumber: 1,
         createdAt: now,
         createdBy: "operator@video-action.local",
-        notes: "Created via frontend editor v1",
+        notes: "Created via frontend editor v1.0",
         scenes: projectScenes,
         tracks,
         assets,
@@ -274,6 +298,7 @@ export default function Home() {
   const [projectName, setProjectName] = useState("Video pipeline demo");
   const [scenes, setScenes] = useState<EditableScene[]>(initialScenes);
   const [priority, setPriority] = useState<RenderRequest["priority"]>("normal");
+  const [userRole, setUserRole] = useState<UserRole>("editor");
 
   const [createdProject, setCreatedProject] = useState<VideoProject | null>(
     null,
@@ -283,6 +308,9 @@ export default function Home() {
   const [exportStatus, setExportStatus] = useState<ExportStatusResponse | null>(
     null,
   );
+
+  const [errorSummary, setErrorSummary] = useState<ErrorSummary | null>(null);
+  const [errorLogs, setErrorLogs] = useState<ErrorLogItem[]>([]);
 
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -312,6 +340,31 @@ export default function Home() {
       }
     };
   }, []);
+
+  const refreshProject = async (projectId: string): Promise<void> => {
+    const project = await requestJson<VideoProject>(
+      `/projects/${projectId}`,
+      undefined,
+      {
+        role: userRole,
+      },
+    );
+    setApiProject(project);
+  };
+
+  const refreshErrorDashboard = async (): Promise<void> => {
+    const [summary, logs] = await Promise.all([
+      requestJson<ErrorSummary>("/ops/errors/summary", undefined, {
+        role: userRole,
+      }),
+      requestJson<ErrorLogItem[]>("/ops/errors?limit=12", undefined, {
+        role: userRole,
+      }),
+    ]);
+
+    setErrorSummary(summary);
+    setErrorLogs(logs);
+  };
 
   const updateScene = (
     sceneId: string,
@@ -379,16 +432,19 @@ export default function Home() {
         projectName,
         scenes,
       );
-      const persistedProject = await requestJson<VideoProject>("/projects", {
-        method: "POST",
-        body: JSON.stringify(project),
-      });
+      const persistedProject = await requestJson<VideoProject>(
+        "/projects",
+        {
+          method: "POST",
+          body: JSON.stringify(project),
+        },
+        {
+          role: userRole,
+        },
+      );
       setCreatedProject(persistedProject);
 
-      const projectFromApi = await requestJson<VideoProject>(
-        `/projects/${persistedProject.id}`,
-      );
-      setApiProject(projectFromApi);
+      await refreshProject(persistedProject.id);
 
       const renderRequest: RenderRequest = {
         requestId: makeId("request"),
@@ -400,10 +456,16 @@ export default function Home() {
         priority,
       };
 
-      const createdRenderJob = await requestJson<RenderJob>("/render-jobs", {
-        method: "POST",
-        body: JSON.stringify(renderRequest),
-      });
+      const createdRenderJob = await requestJson<RenderJob>(
+        "/render-jobs",
+        {
+          method: "POST",
+          body: JSON.stringify(renderRequest),
+        },
+        {
+          role: userRole,
+        },
+      );
 
       setRenderJob(createdRenderJob);
 
@@ -411,12 +473,20 @@ export default function Home() {
         try {
           const nextJob = await requestJson<RenderJob>(
             `/render-jobs/${createdRenderJob.id}`,
+            undefined,
+            {
+              role: userRole,
+            },
           );
           setRenderJob(nextJob);
 
           if (nextJob.status === "done" || nextJob.status === "failed") {
             const status = await requestJson<ExportStatusResponse>(
               `/exports/${nextJob.id}`,
+              undefined,
+              {
+                role: userRole,
+              },
             );
             setExportStatus(status);
 
@@ -441,6 +511,106 @@ export default function Home() {
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : "Ошибка запуска сборки.",
+      );
+    } finally {
+      setLoading(false);
+      void refreshErrorDashboard().catch(() => undefined);
+    }
+  };
+
+  const createVersionFromCurrent = async (): Promise<void> => {
+    if (!apiProject) {
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage(null);
+    try {
+      await requestJson<VideoProject["versions"][number]>(
+        `/projects/${apiProject.id}/versions`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            createdBy: "operator@video-action.local",
+            notes: "Created from frontend product minimum panel",
+          }),
+        },
+        {
+          role: userRole,
+        },
+      );
+
+      await refreshProject(apiProject.id);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Не удалось создать версию.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addPresetToCurrentVersion = async (): Promise<void> => {
+    if (!apiProject) {
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage(null);
+    try {
+      await requestJson<VideoProject["versions"][number]>(
+        `/projects/${apiProject.id}/versions/${apiProject.currentVersionId}/export-presets`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name: "Pilot 720p Fast",
+            format: "mp4",
+            resolution: "720p",
+            fps: 24,
+            bitrateKbps: 4000,
+            audioCodec: "aac",
+          }),
+        },
+        {
+          role: userRole,
+        },
+      );
+
+      await refreshProject(apiProject.id);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Не удалось добавить пресет.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const switchVersion = async (versionId: string): Promise<void> => {
+    if (!apiProject) {
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage(null);
+    try {
+      await requestJson<VideoProject>(
+        `/projects/${apiProject.id}/current-version`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ versionId }),
+        },
+        {
+          role: userRole,
+        },
+      );
+
+      await refreshProject(apiProject.id);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Не удалось переключить версию.",
       );
     } finally {
       setLoading(false);
@@ -471,12 +641,12 @@ export default function Home() {
             fontSize: 12,
           }}
         >
-          Frontend Editor v1
+          Product minimum v1.0
         </p>
         <h1
           style={{ margin: "8px 0 10px", fontSize: "clamp(28px, 5vw, 42px)" }}
         >
-          Таймлайн до рендера
+          Идея → проект → рендер → файл
         </h1>
         <p
           style={{
@@ -486,8 +656,8 @@ export default function Home() {
             lineHeight: 1.5,
           }}
         >
-          Оператор формирует структуру сцен, правит тексты и переходы, затем
-          запускает сборку через API.
+          Редактор сцены, минимальные роли доступа, версии проекта, пресеты
+          экспорта и мониторинг ошибок API.
         </p>
       </section>
 
@@ -551,12 +721,75 @@ export default function Home() {
           background: "var(--card)",
         }}
       >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+          }}
+        >
+          <label
+            style={{
+              display: "flex",
+              gap: 8,
+              alignItems: "center",
+              fontSize: 14,
+            }}
+            htmlFor="role"
+          >
+            Роль:
+            <select
+              id="role"
+              value={userRole}
+              onChange={(event) => {
+                setUserRole(event.target.value as UserRole);
+              }}
+              style={{
+                borderRadius: 8,
+                border: "1px solid var(--line)",
+                padding: "8px 10px",
+                color: "var(--text)",
+                background: "#0b1628",
+              }}
+            >
+              <option value="editor">editor</option>
+              <option value="reader">reader</option>
+            </select>
+          </label>
+
+          <button
+            type="button"
+            onClick={() => {
+              void refreshErrorDashboard().catch((error) => {
+                setErrorMessage(
+                  error instanceof Error
+                    ? error.message
+                    : "Не удалось загрузить ops dashboard.",
+                );
+              });
+            }}
+            style={{
+              borderRadius: 10,
+              border: "1px solid var(--line)",
+              background: "#132440",
+              color: "var(--text)",
+              padding: "9px 12px",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Обновить dashboard ошибок
+          </button>
+        </div>
+
         <label
           style={{
             display: "block",
             fontSize: 13,
             color: "var(--muted)",
             marginBottom: 6,
+            marginTop: 12,
           }}
           htmlFor="project-name"
         >
@@ -842,31 +1075,98 @@ export default function Home() {
               : "Проект еще не создан"}
           </p>
           {apiProject ? (
-            <pre
-              style={{
-                marginTop: 10,
-                background: "#0a1321",
-                border: "1px solid var(--line)",
-                borderRadius: 10,
-                padding: 10,
-                overflow: "auto",
-                fontFamily: "var(--font-mono), monospace",
-                fontSize: 12,
-              }}
-            >
-              {JSON.stringify(
-                {
-                  id: apiProject.id,
-                  name: apiProject.name,
-                  scenes: apiProject.versions[0]?.scenes.length ?? 0,
-                  tracks:
-                    apiProject.versions[0]?.tracks.map((track) => track.kind) ??
-                    [],
-                },
-                null,
-                2,
-              )}
-            </pre>
+            <>
+              <pre
+                style={{
+                  marginTop: 10,
+                  background: "#0a1321",
+                  border: "1px solid var(--line)",
+                  borderRadius: 10,
+                  padding: 10,
+                  overflow: "auto",
+                  fontFamily: "var(--font-mono), monospace",
+                  fontSize: 12,
+                }}
+              >
+                {JSON.stringify(
+                  {
+                    id: apiProject.id,
+                    name: apiProject.name,
+                    currentVersionId: apiProject.currentVersionId,
+                    versions: apiProject.versions.map((version) => ({
+                      id: version.id,
+                      number: version.versionNumber,
+                      presets: version.exportPresets.length,
+                    })),
+                  },
+                  null,
+                  2,
+                )}
+              </pre>
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  flexWrap: "wrap",
+                  marginTop: 10,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    void createVersionFromCurrent();
+                  }}
+                  disabled={loading || userRole === "reader"}
+                  style={{
+                    borderRadius: 8,
+                    border: "1px solid var(--line)",
+                    background: "#132440",
+                    color: "var(--text)",
+                    padding: "8px 10px",
+                  }}
+                >
+                  + Новая версия
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void addPresetToCurrentVersion();
+                  }}
+                  disabled={loading || userRole === "reader"}
+                  style={{
+                    borderRadius: 8,
+                    border: "1px solid var(--line)",
+                    background: "#132440",
+                    color: "var(--text)",
+                    padding: "8px 10px",
+                  }}
+                >
+                  + Preset к текущей версии
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const latest = [...apiProject.versions].sort(
+                      (a, b) => b.versionNumber - a.versionNumber,
+                    )[0];
+                    if (latest) {
+                      void switchVersion(latest.id);
+                    }
+                  }}
+                  disabled={loading || userRole === "reader"}
+                  style={{
+                    borderRadius: 8,
+                    border: "1px solid var(--line)",
+                    background: "#132440",
+                    color: "var(--text)",
+                    padding: "8px 10px",
+                  }}
+                >
+                  Сделать latest текущей
+                </button>
+              </div>
+            </>
           ) : null}
         </article>
 
@@ -924,6 +1224,55 @@ export default function Home() {
               ) : null}
             </div>
           ) : null}
+        </article>
+
+        <article
+          style={{
+            border: "1px solid var(--line)",
+            borderRadius: 14,
+            padding: 14,
+            background: "var(--card)",
+          }}
+        >
+          <h2 style={{ marginTop: 0, marginBottom: 10, fontSize: 18 }}>
+            Ops: ошибки API
+          </h2>
+          <p style={{ margin: 0, color: "var(--muted)", fontSize: 14 }}>
+            За 24ч: {errorSummary?.totalLast24h ?? 0}
+          </p>
+          <p style={{ marginTop: 6, color: "var(--muted)", fontSize: 13 }}>
+            {errorSummary?.byStatusCode
+              .map((item) => `${item.statusCode}: ${item.total}`)
+              .join(" · ") ?? "нет данных"}
+          </p>
+
+          <div
+            style={{
+              marginTop: 8,
+              maxHeight: 180,
+              overflow: "auto",
+              fontSize: 12,
+            }}
+          >
+            {errorLogs.length === 0 ? (
+              <p style={{ margin: 0, color: "var(--muted)" }}>Логов пока нет</p>
+            ) : (
+              errorLogs.map((log) => (
+                <div
+                  key={log.id}
+                  style={{
+                    borderTop: "1px dashed var(--line)",
+                    padding: "8px 0",
+                  }}
+                >
+                  <div style={{ fontFamily: "var(--font-mono), monospace" }}>
+                    {log.statusCode} {log.method} {log.path}
+                  </div>
+                  <div style={{ color: "var(--muted)" }}>{log.message}</div>
+                </div>
+              ))
+            )}
+          </div>
         </article>
       </section>
     </main>
