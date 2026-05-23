@@ -17,6 +17,8 @@ import { v7 as uuidv7 } from "uuid";
 import { ProjectsRepository } from "../projects/projects.repository.js";
 // biome-ignore lint/style/useImportType: NestJS DI needs runtime class references.
 import { RenderJobsRepository } from "./render-jobs.repository.js";
+// biome-ignore lint/style/useImportType: NestJS DI needs runtime class references.
+import { RenderPipelineAdapter } from "./render-pipeline.adapter.js";
 
 export interface ExportStatusResponse {
   exportId: string;
@@ -35,6 +37,7 @@ export class RenderJobsService implements OnModuleDestroy {
   constructor(
     private readonly projectsRepository: ProjectsRepository,
     private readonly renderJobsRepository: RenderJobsRepository,
+    private readonly renderPipelineAdapter: RenderPipelineAdapter,
   ) {}
 
   onModuleDestroy(): void {
@@ -85,7 +88,7 @@ export class RenderJobsService implements OnModuleDestroy {
       maxAttempts: 3,
     });
 
-    this.scheduleLifecycle(jobId, request);
+    this.scheduleLifecycle(jobId, request, project);
 
     const job = await this.renderJobsRepository.findByExternalId(jobId);
     if (!job) {
@@ -199,65 +202,53 @@ export class RenderJobsService implements OnModuleDestroy {
     }
   }
 
-  private scheduleLifecycle(jobId: string, request: RenderRequest): void {
+  private scheduleLifecycle(
+    jobId: string,
+    request: RenderRequest,
+    project: VideoProject,
+  ): void {
     const runningTimer = setTimeout(async () => {
       try {
         await this.renderJobsRepository.markRunning(jobId);
       } catch {
         this.clearJobTimers(jobId);
       }
-    }, 500);
+    }, 300);
 
     const finalTimer = setTimeout(async () => {
       try {
-        const shouldFail = request.exportPresetId
-          .toLowerCase()
-          .includes("fail");
-        if (shouldFail) {
-          const failedResult: RenderResult = {
-            jobId,
-            status: "failed",
-            durationMs: 1200,
-            artifacts: [
-              {
-                kind: "log",
-                url: `https://cdn.video-action.local/logs/${jobId}.log`,
-              },
-            ],
-            errorCode: "RENDER_PIPELINE_ERROR",
-            errorMessage:
-              "Prototype render failed. Check source assets and preset settings.",
-          };
+        const executed = await this.renderPipelineAdapter.execute({
+          jobId,
+          project,
+          request,
+        });
 
-          await this.renderJobsRepository.markFailed(jobId, failedResult);
-        } else {
-          const doneResult: RenderResult = {
-            jobId,
-            status: "done",
-            durationMs: 2100,
-            exportUrl: `https://cdn.video-action.local/exports/${jobId}.mp4`,
-            artifacts: [
-              {
-                kind: "video",
-                url: `https://cdn.video-action.local/exports/${jobId}.mp4`,
-              },
-              {
-                kind: "log",
-                url: `https://cdn.video-action.local/logs/${jobId}.log`,
-              },
-              {
-                kind: "timeline",
-                url: `https://cdn.video-action.local/timelines/${jobId}.json`,
-              },
-            ],
-          };
+        const doneResult: RenderResult = {
+          jobId,
+          status: "done",
+          durationMs: executed.durationMs,
+          exportUrl: executed.exportUrl,
+          artifacts: executed.artifacts,
+        };
 
-          await this.renderJobsRepository.markDone(jobId, doneResult);
-        }
+        await this.renderJobsRepository.markDone(jobId, doneResult);
+      } catch (error) {
+        const failedResult: RenderResult = {
+          jobId,
+          status: "failed",
+          durationMs: 0,
+          artifacts: [],
+          errorCode: "RENDER_PIPELINE_ERROR",
+          errorMessage:
+            error instanceof Error
+              ? error.message
+              : "Unknown render pipeline error",
+        };
+        await this.renderJobsRepository.markFailed(jobId, failedResult);
       } finally {
         this.clearJobTimers(jobId);
       }
-    }, 2000);
+    }, 900);
 
     this.activeTimers.set(jobId, [runningTimer, finalTimer]);
   }

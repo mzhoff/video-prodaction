@@ -8,6 +8,7 @@ import { ExportsController } from "./render/exports.controller.js";
 import { RenderJobsController } from "./render/render-jobs.controller.js";
 import { RenderJobsRepository } from "./render/render-jobs.repository.js";
 import { RenderJobsService } from "./render/render-jobs.service.js";
+import { RenderPipelineAdapter } from "./render/render-pipeline.adapter.js";
 import { ReverieAdapter } from "./timeline/reverie.adapter.js";
 import { TimelineController } from "./timeline/timeline.controller.js";
 import { TimelineService } from "./timeline/timeline.service.js";
@@ -25,6 +26,7 @@ import { TimelineDraftsRepository } from "./timeline/timeline-drafts.repository.
     ProjectsRepository,
     ProjectsService,
     RenderJobsRepository,
+    RenderPipelineAdapter,
     RenderJobsService,
     ReverieAdapter,
     TimelineDraftsRepository,
