@@ -49,4 +49,4 @@ COPY --from=installer-production --chown=nestjs:nodejs /app/packages/api/node_mo
 EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
-CMD ["node", "apps/api/dist/main.js"]
+CMD ["node", "apps/api/dist/apps/api/src/main.js"]
