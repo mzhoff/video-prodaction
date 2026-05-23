@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  NotFoundException,
 } from "@nestjs/common";
 import { type VideoProject, validateVideoProject } from "@repo/api";
 import { v7 as uuidv7 } from "uuid";
@@ -38,6 +39,18 @@ export class ProjectsService {
     }
 
     return validation.value;
+  }
+
+  async getProject(projectId: string): Promise<VideoProject> {
+    const project = await this.projectsRepository.findByExternalId(projectId);
+    if (!project) {
+      throw new NotFoundException({
+        message: "Project not found",
+        projectId,
+      });
+    }
+
+    return project;
   }
 
   private normalizeIncomingProject(payload: unknown): unknown {
