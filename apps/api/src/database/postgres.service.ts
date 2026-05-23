@@ -66,6 +66,23 @@ export class PostgresService implements OnModuleInit, OnModuleDestroy {
 
       CREATE INDEX IF NOT EXISTS render_jobs_project_external_id_idx
         ON render_jobs(project_external_id);
+
+      CREATE TABLE IF NOT EXISTS timeline_drafts (
+        id BIGSERIAL PRIMARY KEY,
+        external_id TEXT NOT NULL UNIQUE,
+        source_semantic_id TEXT NOT NULL,
+        use_case TEXT NOT NULL,
+        semantic_payload JSONB NOT NULL,
+        draft_payload JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT timeline_drafts_use_case_check CHECK (
+          use_case IN ('hook', 'one-minute-script', 'social-post')
+        )
+      );
+
+      CREATE INDEX IF NOT EXISTS timeline_drafts_source_semantic_id_idx
+        ON timeline_drafts(source_semantic_id);
     `);
   }
 }
