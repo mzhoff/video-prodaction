@@ -51,10 +51,14 @@ describe("RenderJobsService", () => {
       markDone: vi.fn(),
       markFailed: vi.fn(),
     };
+    const renderPipelineAdapter = {
+      execute: vi.fn(),
+    };
 
     const service = new RenderJobsService(
       projectsRepository as never,
       renderJobsRepository as never,
+      renderPipelineAdapter as never,
     );
 
     await expect(
@@ -102,10 +106,23 @@ describe("RenderJobsService", () => {
       markDone: vi.fn().mockResolvedValue(undefined),
       markFailed: vi.fn().mockResolvedValue(undefined),
     };
+    const renderPipelineAdapter = {
+      execute: vi.fn().mockResolvedValue({
+        exportUrl: "/artifacts/renders/project/version/job.mp4",
+        artifacts: [
+          {
+            kind: "video",
+            url: "/artifacts/renders/project/version/job.mp4",
+          },
+        ],
+        durationMs: 1000,
+      }),
+    };
 
     const service = new RenderJobsService(
       projectsRepository as never,
       renderJobsRepository as never,
+      renderPipelineAdapter as never,
     );
 
     const result = await service.createRenderJob({
@@ -133,14 +150,83 @@ describe("RenderJobsService", () => {
       markDone: vi.fn(),
       markFailed: vi.fn(),
     };
+    const renderPipelineAdapter = {
+      execute: vi.fn(),
+    };
 
     const service = new RenderJobsService(
       projectsRepository as never,
       renderJobsRepository as never,
+      renderPipelineAdapter as never,
     );
 
     await expect(service.createRenderJob({})).rejects.toBeInstanceOf(
       BadRequestException,
     );
+  });
+
+  it("invokes render pipeline after job scheduling", async () => {
+    vi.useFakeTimers();
+
+    const project = makeProject();
+    const queuedJob = {
+      id: "01973a41-00fd-7ce2-a765-cf7da6f989ab",
+      projectId: project.id,
+      projectVersionId: "version-1",
+      request: {
+        requestId: "01973a40-917e-7cf2-af35-b15bb7f28f8a",
+        projectId: project.id,
+        projectVersionId: "version-1",
+        exportPresetId: "preset-1",
+        requestedBy: "pm@local",
+        requestedAt: "2026-05-23T00:00:00.000Z",
+        priority: "normal" as const,
+      },
+      status: "queued" as const,
+      attempts: 0,
+      maxAttempts: 3,
+      createdAt: "2026-05-23T00:00:00.000Z",
+      updatedAt: "2026-05-23T00:00:00.000Z",
+    };
+
+    const projectsRepository = {
+      findByExternalId: vi.fn().mockResolvedValue(project),
+    };
+
+    const renderJobsRepository = {
+      createQueuedJob: vi.fn().mockResolvedValue(undefined),
+      findByExternalId: vi.fn().mockResolvedValue(queuedJob),
+      markRunning: vi.fn().mockResolvedValue(undefined),
+      markDone: vi.fn().mockResolvedValue(undefined),
+      markFailed: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const renderPipelineAdapter = {
+      execute: vi.fn().mockResolvedValue({
+        exportUrl: "/artifacts/renders/project/version/job.mp4",
+        artifacts: [],
+        durationMs: 1200,
+      }),
+    };
+
+    const service = new RenderJobsService(
+      projectsRepository as never,
+      renderJobsRepository as never,
+      renderPipelineAdapter as never,
+    );
+
+    await service.createRenderJob({
+      projectId: project.id,
+      projectVersionId: "version-1",
+      exportPresetId: "preset-1",
+      requestedBy: "pm@local",
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(renderPipelineAdapter.execute).toHaveBeenCalledTimes(1);
+    expect(renderJobsRepository.markDone).toHaveBeenCalledTimes(1);
+
+    service.onModuleDestroy();
   });
 });
