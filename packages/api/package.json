@@ -9,6 +9,7 @@
     "lint": "biome check",
     "lint:fix": "biome check --fix",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/contracts.test.ts",
     "openapi-ts": "openapi-ts"
   },
   "main": "./dist/entry.js",
@@ -34,6 +35,7 @@
     "@repo/typescript-config": "workspace:*",
     "@tanstack/react-query": "^5.90.16",
     "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
     "ts-loader": "^9.4.3",
     "ts-node": "^10.9.2",
     "typescript": "catalog:"
