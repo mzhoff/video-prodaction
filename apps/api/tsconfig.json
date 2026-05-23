@@ -2,9 +2,13 @@
   "extends": "@repo/typescript-config/nestjs.json",
   "compilerOptions": {
     "baseUrl": "./",
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
     "outDir": "./dist",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@repo/api": ["../../packages/api/src/entry.ts"],
+      "@repo/api/*": ["../../packages/api/src/*"]
     },
     "types": ["node", "vitest/globals"]
   }
